@@ -1,12 +1,11 @@
 import os
-import random
+import asyncio
 import discord
 import requests
-from discord import app_commands
 from discord.ext import commands
-from dotenv import load_dotenv
+from local_config import DISCORD_BOT_TOKEN
 
-load_dotenv()
+GUILD_ID = 788782282122854400
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -17,7 +16,12 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 async def on_ready():
     print(f"Logged in as {bot.user}!")
     try:
-        synced = await bot.tree.sync()
+        guild = discord.Object(id=GUILD_ID)
+        bot.tree.copy_global_to(guild=guild)
+        synced = await bot.tree.sync(guild=guild)
+        global_commands = await bot.tree.fetch_commands()
+        for command in global_commands:
+            await command.delete()
         print(f"Synced {len(synced)} command(s)")
     except Exception as e:
         print(f"Could not sync commands: {e}")
@@ -38,6 +42,40 @@ async def slash_hello(interaction: discord.Interaction):
 async def slash_ping(interaction: discord.Interaction):
     await interaction.response.send_message("Pong!")
 
+async def fetch_json(url, params=None):
+    response = await asyncio.to_thread(requests.get, url, params=params, timeout=10)
+    response.raise_for_status()
+    return response.json()
+
+@bot.tree.command(name="space-pic", description="Get NASA's Astronomy Picture of the Day")
+async def space_pic(interaction: discord.Interaction):
+    await interaction.response.defer()
+    try:
+        data = await fetch_json(
+            "https://api.nasa.gov/planetary/apod",
+            params={"api_key": os.getenv("NASA_API_KEY", "DEMO_KEY")},
+        )
+        explanation = data.get("explanation", "")
+        if len(explanation) > 400:
+            explanation = explanation[:397] + "..."
+        embed = discord.Embed(
+            title=data.get("title", "NASA APOD"),
+            description=explanation or "No description available.",
+            color=discord.Color.blue(),
+        )
+        if data.get("media_type") == "image":
+            embed.set_image(url=data["url"])
+        if data.get("url"):
+            embed.url = data["url"]
+        await interaction.followup.send(embed=embed)
+    except requests.HTTPError as exc:
+        if exc.response is not None and exc.response.status_code == 429:
+            message = "NASA's shared DEMO_KEY limit is exhausted. Set NASA_API_KEY in your shell or try again later."
+        else:
+            message = "Couldn't retrieve NASA's Astronomy Picture of the Day."
+        await interaction.followup.send(message)
+    except (requests.RequestException, ValueError, KeyError):
+        await interaction.followup.send("Couldn't retrieve NASA's Astronomy Picture of the Day.")
 
 @bot.event
 async def on_message(message):
@@ -50,8 +88,7 @@ async def on_message(message):
         await message.channel.send(f"slime you too, {message.author.name}")
     await bot.process_commands(message)
 
-token = os.getenv("DISCORD_BOT_TOKEN")
-if not token:
-    raise RuntimeError("Set the DISCORD_BOT_TOKEN environment variable before starting the bot.")
+if DISCORD_BOT_TOKEN == "":
+    raise RuntimeError("Add your Discord token to local_config.py before starting the bot.")
 
-bot.run(token)
+bot.run(DISCORD_BOT_TOKEN)
