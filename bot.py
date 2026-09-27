@@ -1,6 +1,9 @@
 import os
 import asyncio
+import random
+from datetime import datetime, timezone
 import discord
+from discord import app_commands
 import requests
 from discord.ext import commands
 from local_config import DISCORD_BOT_TOKEN
@@ -76,6 +79,115 @@ async def space_pic(interaction: discord.Interaction):
         await interaction.followup.send(message)
     except (requests.RequestException, ValueError, KeyError):
         await interaction.followup.send("Couldn't retrieve NASA's Astronomy Picture of the Day.")
+
+@bot.tree.command(name="mars-rover", description="Get a photo taken by a Mars Rover")
+@app_commands.choices(rover=[
+    app_commands.Choice(name="Curiosity 🤖", value="curiosity"),
+    app_commands.Choice(name="Perseverance 🚜", value="perseverance"),
+])
+async def mars_rover(interaction: discord.Interaction, rover: app_commands.Choice[str]):
+    await interaction.response.defer()
+    try:
+        data = await fetch_json(
+            f"https://api.nasa.gov/mars-photos/api/v1/rovers/{rover.value}/photos",
+            params={"sol": 1000, "api_key": os.getenv("NASA_API_KEY", "DEMO_KEY")},
+        )
+        photos = data.get("photos", [])
+        if not photos:
+            await interaction.followup.send("No photos found for this query.")
+            return
+
+        photo = random.choice(photos)
+        image_url = photo.get("img_src")
+        if not image_url:
+            await interaction.followup.send("No photos found for this query.")
+            return
+
+        camera_name = photo.get("camera", {}).get("full_name", "Unknown Camera")
+        earth_date = photo.get("earth_date", "N/A")
+        embed = discord.Embed(
+            title=f"{rover.value.capitalize()} Rover on Mars",
+            description=f"Captured by: **{camera_name}**",
+            color=discord.Color.red(),
+        )
+        embed.set_image(url=image_url)
+        embed.set_footer(text=f"Martian Sol: 1000 • Earth Date: {earth_date}")
+        await interaction.followup.send(embed=embed)
+    except (requests.RequestException, ValueError, TypeError, KeyError):
+        await interaction.followup.send("Failed to retrieve a photo from Mars.")
+
+@bot.tree.command(name="neo", description="Track asteroids passing close to Earth today")
+async def near_earth_objects(interaction: discord.Interaction):
+    await interaction.response.defer()
+    today = datetime.now(timezone.utc).date().isoformat()
+    try:
+        data = await fetch_json(
+            "https://api.nasa.gov/neo/rest/v1/feed",
+            params={
+                "start_date": today,
+                "end_date": today,
+                "api_key": os.getenv("NASA_API_KEY", "DEMO_KEY"),
+            },
+        )
+        asteroids = data.get("near_earth_objects", {}).get(today, [])
+        count = data.get("element_count", len(asteroids))
+        embed = discord.Embed(
+            title="Near-Earth Object Tracker",
+            description=f"NASA tracked **{count} asteroids** near Earth today.",
+            color=discord.Color.dark_gold(),
+        )
+
+        for asteroid in asteroids[:4]:
+            approach = (asteroid.get("close_approach_data") or [{}])[0]
+            miss_distance = float(approach.get("miss_distance", {}).get("kilometers", 0))
+            velocity = float(approach.get("relative_velocity", {}).get("kilometers_per_hour", 0))
+            hazardous = asteroid.get("is_potentially_hazardous_asteroid", False)
+            embed.add_field(
+                name=f"Asteroid {asteroid.get('name', 'Unknown')}",
+                value=(
+                    f"**Hazardous:** {'Yes' if hazardous else 'No'}\n"
+                    f"**Miss Distance:** {miss_distance:,.0f} km\n"
+                    f"**Speed:** {velocity:,.0f} km/h"
+                ),
+                inline=True,
+            )
+
+        embed.set_footer(text="Data source: NASA NeoWS API")
+        await interaction.followup.send(embed=embed)
+    except (requests.RequestException, ValueError, TypeError, KeyError, IndexError):
+        await interaction.followup.send("Error fetching asteroid data.")
+
+@bot.tree.command(name="nasa-search", description="Search NASA's library of space images")
+async def nasa_search(interaction: discord.Interaction, query: str):
+    await interaction.response.defer()
+    try:
+        data = await fetch_json(
+            "https://images-api.nasa.gov/search",
+            params={"q": query, "media_type": "image"},
+        )
+        items = data.get("collection", {}).get("items", [])
+        if not items:
+            await interaction.followup.send(f"No images found for '{query}'.")
+            return
+
+        item = items[0]
+        metadata = (item.get("data") or [{}])[0]
+        links = item.get("links") or []
+        title = metadata.get("title", "NASA Result")
+        description = metadata.get("description", "No description available.")
+        description = description[:297] + "..." if len(description) > 300 else description
+        image_url = links[0].get("href") if links else None
+
+        embed = discord.Embed(
+            title=f"NASA Search: {title[:230]}",
+            description=description or "No description available.",
+            color=discord.Color.blue(),
+        )
+        if image_url:
+            embed.set_image(url=image_url)
+        await interaction.followup.send(embed=embed)
+    except (requests.RequestException, ValueError, TypeError, KeyError, IndexError):
+        await interaction.followup.send("Failed to reach NASA Image Search API.")
 
 @bot.event
 async def on_message(message):
