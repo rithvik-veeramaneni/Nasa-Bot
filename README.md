@@ -35,3 +35,5 @@ NASABot is a Discord bot built with **Python** and **`discord.py`** that interfa
 
 * **❓ Helper Directory (`/help`)**
   * Displays an interactive list of all available slash commands and their usages.
+
+Have Fun!!!!
